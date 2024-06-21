@@ -243,7 +243,10 @@ func uint32tofloat64(uint32) float64
 
 func complex128div(num complex128, den complex128) (quo complex128)
 
+// 获取当前的程序计数器 program counter
 func getcallerpc() uintptr
+
+// 获取当前的栈指针 stack pointer
 func getcallersp() uintptr
 
 // race detection

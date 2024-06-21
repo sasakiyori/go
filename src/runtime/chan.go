@@ -63,6 +63,7 @@ func reflect_makechan(t *chantype, size int) *hchan {
 }
 
 func makechan64(t *chantype, size int64) *hchan {
+	// 根据平台不同 int可能是int64或者int32 确保不会有溢出的情况发生
 	if int64(int(size)) != size {
 		panic(plainError("makechan: size out of range"))
 	}
@@ -81,6 +82,7 @@ func makechan(t *chantype, size int) *hchan {
 		throw("makechan: bad alignment")
 	}
 
+	// 计算 单元素size * 元素总量 是否溢出
 	mem, overflow := math.MulUintptr(elem.Size_, uintptr(size))
 	if overflow || mem > maxAlloc-hchanSize || size < 0 {
 		panic(plainError("makechan: size out of range"))
@@ -94,16 +96,25 @@ func makechan(t *chantype, size int) *hchan {
 	switch {
 	case mem == 0:
 		// Queue or element size is zero.
+		// 动态分配一块内存 转为*hchan 让指针指向它
+		// 函数来自src/runtime/malloc.go
 		c = (*hchan)(mallocgc(hchanSize, nil, true))
 		// Race detector uses this location for synchronization.
+		// 自指 因为c.buf的类型是unsafe.Pointer所以需要转换一下
+		// c.buf = unsafe.Pointer(&c.buf)
 		c.buf = c.raceaddr()
 	case !elem.Pointers():
 		// Elements do not contain pointers.
 		// Allocate hchan and buf in one call.
 		c = (*hchan)(mallocgc(hchanSize+mem, nil, true))
+		// 函数来自src/runtime/stubs.go
+		// func add(p unsafe.Pointer, x uintptr) unsafe.Pointer
+		// 将动态分配的内存指针 偏移hchanSize作为buf的地址
+		// hchanSize是hchan结构体经过内存对齐后的大小
 		c.buf = add(unsafe.Pointer(c), hchanSize)
 	default:
 		// Elements contain pointers.
+		// 含有指针 不定长 直接malloc
 		c = new(hchan)
 		c.buf = mallocgc(mem, elem, true)
 	}
@@ -111,6 +122,8 @@ func makechan(t *chantype, size int) *hchan {
 	c.elemsize = uint16(elem.Size_)
 	c.elemtype = elem
 	c.dataqsiz = uint(size)
+	// 设置mutex等级
+	// 等级来自src/runtime/lockrank.go
 	lockInit(&c.lock, lockRankHchan)
 
 	if debugChan {
@@ -131,6 +144,7 @@ func makechan(t *chantype, size int) *hchan {
 //
 //go:linkname chanbuf
 func chanbuf(c *hchan, i uint) unsafe.Pointer {
+	// 环状链表第i个元素的地址
 	return add(c.buf, uintptr(i)*uintptr(c.elemsize))
 }
 
