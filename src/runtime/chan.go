@@ -215,6 +215,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 	// channel wasn't closed during the first observation. However, nothing here
 	// guarantees forward progress. We rely on the side effects of lock release in
 	// chanrecv() and closechan() to update this thread's view of c.closed and full().
+	// 快速检查非阻塞模式下是否可发
 	if !block && c.closed == 0 && full(c) {
 		return false
 	}
@@ -224,6 +225,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		t0 = cputicks()
 	}
 
+	// 加锁
 	lock(&c.lock)
 
 	if c.closed != 0 {
@@ -231,13 +233,16 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		panic(plainError("send on closed channel"))
 	}
 
+	// recvq里出队 返回一个sudog
 	if sg := c.recvq.dequeue(); sg != nil {
 		// Found a waiting receiver. We pass the value we want to send
 		// directly to the receiver, bypassing the channel buffer (if any).
+		// 如果存在就直接发了 不考虑buffer的情况 (因为有buffer意味着不可能有空闲的receiver？)
 		send(c, sg, ep, func() { unlock(&c.lock) }, 3)
 		return true
 	}
 
+	// 如果buffer未满 就放进buffer里
 	if c.qcount < c.dataqsiz {
 		// Space is available in the channel buffer. Enqueue the element to send.
 		qp := chanbuf(c, c.sendx)
@@ -254,6 +259,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {
 		return true
 	}
 
+	// 非阻塞 且buffer满了 返回
 	if !block {
 		unlock(&c.lock)
 		return false
@@ -851,6 +857,7 @@ func reflect_chanclose(c *hchan) {
 	closechan(c)
 }
 
+// 入队
 func (q *waitq) enqueue(sgp *sudog) {
 	sgp.next = nil
 	x := q.last
@@ -865,6 +872,7 @@ func (q *waitq) enqueue(sgp *sudog) {
 	q.last = sgp
 }
 
+// 出队
 func (q *waitq) dequeue() *sudog {
 	for {
 		sgp := q.first

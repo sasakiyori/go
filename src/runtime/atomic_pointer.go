@@ -114,6 +114,7 @@ func sync_atomic_CompareAndSwapUintptr(ptr *uintptr, old, new uintptr) bool
 //go:linkname sync_atomic_CompareAndSwapPointer sync/atomic.CompareAndSwapPointer
 //go:nosplit
 func sync_atomic_CompareAndSwapPointer(ptr *unsafe.Pointer, old, new unsafe.Pointer) bool {
+	// 开启写屏障
 	if writeBarrier.enabled {
 		atomicwb(ptr, new)
 	}

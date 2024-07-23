@@ -112,8 +112,8 @@ type hmap struct {
 	count     int // # live cells == size of map.  Must be first (used by len() builtin)
 	flags     uint8
 	B         uint8  // log_2 of # of buckets (can hold up to loadFactor * 2^B items)
-	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details
-	hash0     uint32 // hash seed
+	noverflow uint16 // approximate number of overflow buckets; see incrnoverflow for details 溢出的桶数目
+	hash0     uint32 // hash seed 随机种子，用于哈希函数计算
 
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
 	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing

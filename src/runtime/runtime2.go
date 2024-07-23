@@ -1178,8 +1178,10 @@ var (
 	gomaxprocs int32
 	ncpu       int32
 	forcegc    forcegcstate
-	sched      schedt
-	newprocs   int32
+	// sched在这里被定义
+	// 全局调度器？
+	sched    schedt
+	newprocs int32
 )
 
 var (

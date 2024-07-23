@@ -599,9 +599,14 @@ func timediv(v int64, div int32, rem *int32) int32 {
 
 // Helpers for Go. Must be NOSPLIT, must only call NOSPLIT functions, and must not block.
 
+// 获取当前绑定在goroutine中执行的线程
+//
 //go:nosplit
 func acquirem() *m {
+	// GPM中的g
 	gp := getg()
+	// GPM中的m
+	// locks++是做什么？
 	gp.m.locks++
 	return gp.m
 }
@@ -609,6 +614,7 @@ func acquirem() *m {
 //go:nosplit
 func releasem(mp *m) {
 	gp := getg()
+	// 似乎就是与acquirem绑定的一个简易锁
 	mp.locks--
 	if mp.locks == 0 && gp.preempt {
 		// restore the preemption request in case we've cleared it in newstack

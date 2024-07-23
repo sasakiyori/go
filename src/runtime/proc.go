@@ -441,11 +441,14 @@ func goparkunlock(lock *mutex, reason waitReason, traceReason traceBlockReason, 
 //
 //go:linkname goready
 func goready(gp *g, traceskip int) {
+	// 切换到g0上
 	systemstack(func() {
 		ready(gp, traceskip, true)
 	})
 }
 
+// 获取一个sudog
+//
 //go:nosplit
 func acquireSudog() *sudog {
 	// Delicate dance: the semaphore implementation calls
@@ -457,11 +460,14 @@ func acquireSudog() *sudog {
 	// The acquirem/releasem increments m.locks during new(sudog),
 	// which keeps the garbage collector from being invoked.
 	mp := acquirem()
+	// mp.p是pointer mp.p.ptr()强转为p指针
 	pp := mp.p.ptr()
 	if len(pp.sudogcache) == 0 {
 		lock(&sched.sudoglock)
 		// First, try to grab a batch from central cache.
+		// sched在runtime2.go中被定义
 		for len(pp.sudogcache) < cap(pp.sudogcache)/2 && sched.sudogcache != nil {
+			// 从sched.sudogcache的头部取出一个sudog 放进p的cache列表中
 			s := sched.sudogcache
 			sched.sudogcache = s.next
 			s.next = nil
@@ -1020,6 +1026,7 @@ const (
 
 // Mark gp ready to run.
 func ready(gp *g, traceskip int, next bool) {
+	// 读取gp状态 (原子)
 	status := readgstatus(gp)
 
 	// Mark runnable.
@@ -1031,11 +1038,13 @@ func ready(gp *g, traceskip int, next bool) {
 
 	// status is Gwaiting or Gscanwaiting, make Grunnable and put on runq
 	trace := traceAcquire()
+	// 切换状态
 	casgstatus(gp, _Gwaiting, _Grunnable)
 	if trace.ok() {
 		trace.GoUnpark(gp, traceskip)
 		traceRelease(trace)
 	}
+	// 放入p的队列中
 	runqput(mp.p.ptr(), gp, next)
 	wakep()
 	releasem(mp)
@@ -3217,6 +3226,7 @@ func execute(gp *g, inheritTime bool) {
 
 	// Assign gp.m before entering _Grunning so running Gs have an
 	// M.
+	// 将m与入参gp绑定 自己应该是要被解绑了
 	mp.curg = gp
 	gp.m = mp
 	casgstatus(gp, _Grunnable, _Grunning)
@@ -3239,6 +3249,7 @@ func execute(gp *g, inheritTime bool) {
 		traceRelease(trace)
 	}
 
+	// 恢复gp的上下文 ？ 待细看
 	gogo(&gp.sched)
 }
 
@@ -4078,24 +4089,35 @@ func park_m(gp *g) {
 	}
 	// N.B. Not using casGToWaiting here because the waitreason is
 	// set by park_m's caller.
+	// 把入参的gp从running转换为waiting
+	// 问：入参的gp和 getg()得到的g有什么不同？
+	// (不确定)：gp是要进行park的g，而getg()是当前正在执行park的g (指的可能是g0，因为之前被切换了)
 	casgstatus(gp, _Grunning, _Gwaiting)
 	if trace.ok() {
 		traceRelease(trace)
 	}
 
+	// 把当前g所在的m的current g与m解绑
+	// 问：current g是什么？与gp和getg()得到的g有什么不同？
+	// 问：m和g在特定时刻，难道不是一对一的吗？
 	dropg()
 
 	if fn := mp.waitunlockf; fn != nil {
+		// 判断是否需要等待
 		ok := fn(gp, mp.waitlock)
+		// 执行完成后 重置
 		mp.waitunlockf = nil
 		mp.waitlock = nil
+		// 不需要等待
 		if !ok {
 			trace := traceAcquire()
+			// 将gp重新切换成runnable
 			casgstatus(gp, _Gwaiting, _Grunnable)
 			if trace.ok() {
 				trace.GoUnpark(gp, 2)
 				traceRelease(trace)
 			}
+			// 将gp重新恢复运行
 			execute(gp, true) // Schedule it back, never returns.
 		}
 	}
@@ -6700,6 +6722,7 @@ func runqput(pp *p, gp *g, next bool) {
 	if next {
 	retryNext:
 		oldnext := pp.runnext
+		// 把下一个将要执行的g 与 gp替换
 		if !pp.runnext.cas(oldnext, guintptr(unsafe.Pointer(gp))) {
 			goto retryNext
 		}
@@ -6711,6 +6734,7 @@ func runqput(pp *p, gp *g, next bool) {
 	}
 
 retry:
+	// p的本地队列中是否还有空间 有的话就放进本地队列
 	h := atomic.LoadAcq(&pp.runqhead) // load-acquire, synchronize with consumers
 	t := pp.runqtail
 	if t-h < uint32(len(pp.runq)) {
@@ -6718,6 +6742,7 @@ retry:
 		atomic.StoreRel(&pp.runqtail, t+1) // store-release, makes the item available for consumption
 		return
 	}
+	// 否则放全局队列
 	if runqputslow(pp, gp, h, t) {
 		return
 	}

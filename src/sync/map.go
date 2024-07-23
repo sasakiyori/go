@@ -47,6 +47,7 @@ type Map struct {
 	// Entries stored in read may be updated concurrently without mu, but updating
 	// a previously-expunged entry requires that the entry be copied to the dirty
 	// map and unexpunged with mu held.
+	// readOnly类型的原子指针
 	read atomic.Pointer[readOnly]
 
 	// dirty contains the portion of the map's contents that require mu to be
@@ -74,6 +75,7 @@ type Map struct {
 type readOnly struct {
 	m       map[any]*entry
 	amended bool // true if the dirty map contains some key not in m.
+	// 如果dirty中有一些read里没有的key
 }
 
 // expunged is an arbitrary pointer that marks entries which have been deleted
@@ -121,32 +123,40 @@ func (m *Map) loadReadOnly() readOnly {
 // value is present.
 // The ok result indicates whether value was found in the map.
 func (m *Map) Load(key any) (value any, ok bool) {
+	// 先从read里取
 	read := m.loadReadOnly()
 	e, ok := read.m[key]
+	// 如果read里没有值，且dirty里有改动
 	if !ok && read.amended {
 		m.mu.Lock()
 		// Avoid reporting a spurious miss if m.dirty got promoted while we were
 		// blocked on m.mu. (If further loads of the same key will not miss, it's
 		// not worth copying the dirty map for this key.)
+		// 加锁之后double check
 		read = m.loadReadOnly()
 		e, ok = read.m[key]
 		if !ok && read.amended {
+			// 替换为dirty里的entry
 			e, ok = m.dirty[key]
 			// Regardless of whether the entry was present, record a miss: this key
 			// will take the slow path until the dirty map is promoted to the read
 			// map.
+			// 标记miss 注意同一个key的多次访问也会不断增加miss
 			m.missLocked()
 		}
 		m.mu.Unlock()
 	}
+	// 前面的条件里多次更新ok了 能成功早成功了
 	if !ok {
 		return nil, false
 	}
+	// 从entry里取出值
 	return e.load()
 }
 
 func (e *entry) load() (value any, ok bool) {
 	p := e.p.Load()
+	// 何时为expunged？
 	if p == nil || p == expunged {
 		return nil, false
 	}
@@ -353,8 +363,11 @@ func (e *entry) trySwap(i *any) (*any, bool) {
 // The loaded result reports whether the key was present.
 func (m *Map) Swap(key, value any) (previous any, loaded bool) {
 	read := m.loadReadOnly()
+	// read里存在的话，直接进行原子替换
 	if e, ok := read.m[key]; ok {
+		// 如果原本是expunged 需要去看dirty里
 		if v, ok := e.trySwap(&value); ok {
+			// 如果原值是expunged 说明原本 sync.Map 中没有这个值
 			if v == nil {
 				return nil, false
 			}
@@ -365,27 +378,35 @@ func (m *Map) Swap(key, value any) (previous any, loaded bool) {
 	m.mu.Lock()
 	read = m.loadReadOnly()
 	if e, ok := read.m[key]; ok {
+		// 使用CAS 判断之前是不是expunged 如果是，替换成nil
 		if e.unexpungeLocked() {
 			// The entry was previously expunged, which implies that there is a
 			// non-nil dirty map and this entry is not in it.
+			// dirty中对应的key置空
 			m.dirty[key] = e
 		}
+		// 交换值
 		if v := e.swapLocked(&value); v != nil {
 			loaded = true
 			previous = *v
 		}
+		// read中没有，dirty中有，直接更新就好
 	} else if e, ok := m.dirty[key]; ok {
 		if v := e.swapLocked(&value); v != nil {
 			loaded = true
 			previous = *v
 		}
 	} else {
+		// read和dirty都没找到 且未被标记为amended
 		if !read.amended {
 			// We're adding the first new key to the dirty map.
 			// Make sure it is allocated and mark the read-only map as incomplete.
+			// 初始化dirty map
 			m.dirtyLocked()
+			// 更新read为amended
 			m.read.Store(&readOnly{m: read.m, amended: true})
 		}
+		// dirty map更新值
 		m.dirty[key] = newEntry(value)
 	}
 	m.mu.Unlock()
@@ -509,6 +530,7 @@ func (m *Map) missLocked() {
 	if m.misses < len(m.dirty) {
 		return
 	}
+	// 如果miss数量太多 则更新read
 	m.read.Store(&readOnly{m: m.dirty})
 	m.dirty = nil
 	m.misses = 0
@@ -519,15 +541,20 @@ func (m *Map) dirtyLocked() {
 		return
 	}
 
+	// 初始化dirty 并从read拷贝
 	read := m.loadReadOnly()
 	m.dirty = make(map[any]*entry, len(read.m))
 	for k, e := range read.m {
+		// 看看里面是不是空值 如果是的话，替换成expunged
+		// why？
 		if !e.tryExpungeLocked() {
+			// 这边用的是同一个地址
 			m.dirty[k] = e
 		}
 	}
 }
 
+// 唯一的置为expunged的地方
 func (e *entry) tryExpungeLocked() (isExpunged bool) {
 	p := e.p.Load()
 	for p == nil {
